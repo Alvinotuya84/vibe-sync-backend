@@ -32,6 +32,27 @@ export class User {
   @Exclude()
   refreshToken?: string;
 
+  @Column({ nullable: true })
+  profileImagePath: string;
+
+  @Column({ default: false })
+  isVerified: boolean;
+
+  @Column({ nullable: true })
+  stripeCustomerId: string;
+
+  @Column({ default: 'free' })
+  accountType: 'free' | 'verified';
+
+  @Column({ nullable: true })
+  bio: string;
+
+  @Column({ nullable: true })
+  location: string;
+
+  @Column({ nullable: true })
+  website: string;
+
   @CreateDateColumn()
   createdAt: Date;
 
