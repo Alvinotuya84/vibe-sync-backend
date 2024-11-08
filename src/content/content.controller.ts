@@ -20,11 +20,21 @@ import { ContentType } from './entities/content.entity';
 import * as path from 'path';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { GetUser } from 'src/modules/auth/decorators/get-user.decorator';
+import { ensureDirectoryExists, UPLOAD_PATHS } from '../utils/file.utils';
 
 @Controller('content')
 @UseGuards(JwtAuthGuard)
 export class ContentController {
-  constructor(private contentService: ContentService) {}
+  constructor(private contentService: ContentService) {
+    // Ensure upload directories exist when controller is initialized
+    this.initializeUploadDirectories();
+  }
+  private async initializeUploadDirectories() {
+    await Promise.all([
+      ensureDirectoryExists(UPLOAD_PATHS.CONTENT.MEDIA),
+      ensureDirectoryExists(UPLOAD_PATHS.CONTENT.THUMBNAILS),
+    ]);
+  }
 
   @Post()
   @UseInterceptors(
@@ -77,7 +87,9 @@ export class ContentController {
       thumbnail?: Express.Multer.File[];
     },
   ) {
-    if (!files.media?.[0]) {
+    console.log('Received DTO:', createContentDto);
+    console.log('Received Files:', files);
+    if (!files?.media?.[0]) {
       throw new BadRequestException('Media file is required');
     }
 
