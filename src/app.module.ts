@@ -10,6 +10,7 @@ import { getTypeOrmConfig } from './config/typeorm.config';
 import { SettingsModule } from './settings/settings.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { ContentModule } from './content/content.module';
 
 @Module({
   imports: [
@@ -25,9 +26,10 @@ import { join } from 'path';
       rootPath: join(__dirname, '..', 'uploads'),
       serveRoot: '/uploads', // This means files will be served at /uploads/*
     }),
-    AuthModule, // Add this
-    UsersModule, // Add this
+    AuthModule,
+    UsersModule,
     SettingsModule,
+    ContentModule,
   ],
   controllers: [AppController], // Add this
   providers: [AppService], // Add this
