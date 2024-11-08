@@ -8,6 +8,8 @@ import { AppService } from './app.service';
 import configuration from './config/configuration';
 import { getTypeOrmConfig } from './config/typeorm.config';
 import { SettingsModule } from './settings/settings.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
@@ -18,6 +20,10 @@ import { SettingsModule } from './settings/settings.module';
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: getTypeOrmConfig,
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'uploads'),
+      serveRoot: '/uploads', // This means files will be served at /uploads/*
     }),
     AuthModule, // Add this
     UsersModule, // Add this
