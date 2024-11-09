@@ -77,17 +77,19 @@ export class ContentService {
   async getCommunityContent(filterDto: FilterContentDto, user: User) {
     const { feed = FeedType.FOR_YOU, page = 1, limit = 10 } = filterDto;
 
+    // Create base query
     const queryBuilder = this.contentRepository
       .createQueryBuilder('content')
       .leftJoinAndSelect('content.creator', 'creator')
       .where('content.isPublished = :isPublished', { isPublished: true });
 
-    switch (feed.toLowerCase()) {
+    // Apply feed-specific filters
+    switch (feed) {
       case FeedType.SUBSCRIBED:
         queryBuilder.innerJoin(
           'user_subscriptions',
           'sub',
-          'sub.creatorId = creator.id AND sub.subscriberId = :userId AND sub.isActive = :isActive',
+          'sub.creatorId = content.creatorId AND sub.subscriberId = :userId AND sub.isActive = :isActive',
           { userId: user.id, isActive: true },
         );
         break;
@@ -97,54 +99,62 @@ export class ContentService {
           .orderBy('content.viewCount', 'DESC')
           .addOrderBy('content.likeCount', 'DESC')
           .andWhere('content.createdAt >= :date', {
-            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
           });
         break;
 
       case FeedType.LIFE:
-        queryBuilder.andWhere(`content.tags::jsonb ? :tag`, { tag: 'life' });
-        // Or if tags is stored as an array:
-        // .andWhere(':tag = ANY(content.tags)', { tag: 'life' });
+        // If tags is a JSON array
+        queryBuilder.andWhere(':tag = ANY(content.tags)', { tag: 'life' });
         break;
 
-      default: // FOR_YOU
+      case FeedType.FOR_YOU:
+      default:
+        // Default sorting for "For You" feed
         queryBuilder
           .orderBy('content.createdAt', 'DESC')
           .addOrderBy('content.likeCount', 'DESC');
+        break;
     }
 
     // Add pagination
     const skip = (page - 1) * limit;
-    const [contents, total] = await queryBuilder
-      .skip(skip)
-      .take(limit)
-      .getManyAndCount();
+    queryBuilder.skip(skip).take(limit);
 
-    // Get likes for these contents for the current user
-    const userLikes = await this.likeRepository.find({
-      where: {
-        userId: user.id,
-        contentId: In(contents.map((c) => c.id)),
-      },
-    });
+    // Execute query
+    const [contents, total] = await queryBuilder.getManyAndCount();
 
-    // Get user's subscriptions
-    const userSubscriptions = await this.subscriptionRepository.find({
-      where: {
-        subscriberId: user.id,
-        creatorId: In(contents.map((c) => c.creatorId)),
-        isActive: true,
-      },
-    });
+    // Get all likes and subscriptions in bulk
+    const [userLikes, userSubscriptions] = await Promise.all([
+      this.likeRepository.find({
+        where: {
+          userId: user.id,
+          contentId: In(contents.map((c) => c.id)),
+        },
+      }),
+      this.subscriptionRepository.find({
+        where: {
+          subscriberId: user.id,
+          creatorId: In(contents.map((c) => c.creatorId)),
+          isActive: true,
+        },
+      }),
+    ]);
 
-    // Enrich content with user-specific data
-    const enrichedContents = contents.map((content) => ({
-      ...content,
-      isLiked: userLikes.some((like) => like.contentId === content.id),
-      isSubscribed: userSubscriptions.some(
-        (sub) => sub.creatorId === content.creatorId,
-      ),
-    }));
+    // Create sets for O(1) lookup
+    const likedContentIds = new Set(userLikes.map((like) => like.contentId));
+    const subscribedCreatorIds = new Set(
+      userSubscriptions.map((sub) => sub.creatorId),
+    );
+
+    // Enrich content
+    const enrichedContents = await Promise.all(
+      contents.map(async (content) => ({
+        ...content,
+        isLiked: await this.hasUserLikedContent(user.id, content.id),
+        isSubscribed: await this.isUserSubscribedTo(user.id, content.creatorId),
+      })),
+    );
 
     return {
       success: true,
@@ -381,8 +391,14 @@ export class ContentService {
     userId: string,
     creatorId: string,
   ): Promise<boolean> {
-    // Implement based on your subscription entity
-    return false;
+    const subscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId: userId,
+        creatorId: creatorId,
+        isActive: true,
+      },
+    });
+    return !!subscription;
   }
 
   async getContentStats(userId: string) {
@@ -465,6 +481,139 @@ export class ContentService {
       success: true,
       message: 'Content retrieved successfully',
       data: { content },
+    };
+  }
+
+  // Add these methods to your ContentService class
+
+  async subscribeToCreator(userId: string, creatorId: string) {
+    // Check if already subscribed
+    const existingSubscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId: userId,
+        creatorId: creatorId,
+      },
+    });
+
+    if (existingSubscription) {
+      if (existingSubscription.isActive) {
+        throw new BadRequestException('Already subscribed to this creator');
+      }
+      // Reactivate subscription
+      existingSubscription.isActive = true;
+      await this.subscriptionRepository.save(existingSubscription);
+    } else {
+      // Create new subscription
+      const subscription = this.subscriptionRepository.create({
+        subscriberId: userId,
+        creatorId: creatorId,
+        isActive: true,
+      });
+      await this.subscriptionRepository.save(subscription);
+    }
+
+    return {
+      success: true,
+      message: 'Successfully subscribed to creator',
+    };
+  }
+
+  async unsubscribeFromCreator(subscriberId: string, creatorId: string) {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId,
+        creatorId,
+        isActive: true,
+      },
+    });
+
+    if (!subscription) {
+      throw new BadRequestException('Not subscribed to this creator');
+    }
+
+    subscription.isActive = false;
+    await this.subscriptionRepository.save(subscription);
+
+    return {
+      success: true,
+      message: 'Successfully unsubscribed from creator',
+    };
+  }
+
+  async getSubscribedCreators(userId: string) {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: {
+        subscriberId: userId,
+        isActive: true,
+      },
+      relations: ['creator'],
+    });
+
+    return {
+      success: true,
+      message: 'Subscribed creators retrieved successfully',
+      data: {
+        creators: subscriptions.map((sub) => sub.creator),
+      },
+    };
+  }
+
+  // Add this method to get single content with subscription status
+  async getContentWithDetails(contentId: string, userId: string) {
+    const content = await this.contentRepository.findOne({
+      where: { id: contentId },
+      relations: ['creator'],
+    });
+
+    if (!content) {
+      throw new NotFoundException('Content not found');
+    }
+
+    // Get user-specific data
+    const [isLiked, isSubscribed] = await Promise.all([
+      this.hasUserLikedContent(userId, contentId),
+      this.isUserSubscribedTo(userId, content.creatorId),
+    ]);
+
+    // Increment view count
+    content.viewCount++;
+    await this.contentRepository.save(content);
+
+    return {
+      success: true,
+      message: 'Content retrieved successfully',
+      data: {
+        content: {
+          ...content,
+          isLiked,
+          isSubscribed,
+        },
+      },
+    };
+  }
+  async getSubscriptions(userId: string) {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: {
+        subscriberId: userId,
+        isActive: true,
+      },
+      relations: ['creator'],
+    });
+
+    return {
+      success: true,
+      message: 'Subscriptions retrieved successfully',
+      data: {
+        subscriptions: subscriptions.map((sub) => ({
+          id: sub.id,
+          creator: {
+            id: sub.creator.id,
+            username: sub.creator.username,
+            // Add other creator fields you want to return
+          },
+          createdAt: sub.createdAt,
+        })),
+      },
     };
   }
 }

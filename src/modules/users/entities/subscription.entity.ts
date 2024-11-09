@@ -5,12 +5,10 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
-  Unique,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 
-@Entity('user_subscriptions')
-@Unique(['subscriberId', 'creatorId'])
+@Entity('user_subscriptions') // Match the table name from your migration
 export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -24,6 +22,9 @@ export class Subscription {
   @Column({ default: true })
   isActive: boolean;
 
+  @CreateDateColumn()
+  createdAt: Date;
+
   @ManyToOne(() => User)
   @JoinColumn({ name: 'subscriberId' })
   subscriber: User;
@@ -31,7 +32,4 @@ export class Subscription {
   @ManyToOne(() => User)
   @JoinColumn({ name: 'creatorId' })
   creator: User;
-
-  @CreateDateColumn()
-  createdAt: Date;
 }
