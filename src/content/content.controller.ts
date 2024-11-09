@@ -11,6 +11,8 @@ import {
   Get,
   Query,
   BadRequestException,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -124,6 +126,10 @@ export class ContentController {
   ) {
     return this.contentService.deleteContent(userId, contentId);
   }
+  @Get('previews/videos')
+  async getVideoPreviews(@GetUser() user: User) {
+    return this.contentService.getVideoPreviews();
+  }
 
   @Get('community')
   async getCommunityContent(
@@ -157,4 +163,16 @@ export class ContentController {
   ) {
     return this.contentService.addComment(user.id, id, text, parentId);
   }
+  // In your ContentController
+  @Get('scroll/feed-videos')
+  async getFeedVideos(
+    @GetUser() user: User,
+    @Query('initialId') initialId?: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit = 10,
+  ) {
+    return this.contentService.getFeedVideos(initialId, user, page, limit);
+  }
+
+  // content.controller.ts
 }

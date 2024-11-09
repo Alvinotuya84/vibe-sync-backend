@@ -1,5 +1,5 @@
-import { Content } from 'src/content/entities/content.entity';
-import { User } from 'src/modules/users/entities/user.entity';
+import { Content } from '../../content/entities/content.entity';
+import { User } from '../../modules/users/entities/user.entity';
 import {
   Entity,
   PrimaryGeneratedColumn,

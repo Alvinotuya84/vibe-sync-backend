@@ -2,9 +2,10 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, QueryFailedError, EntityNotFoundError } from 'typeorm';
 import { Content, ContentType } from './entities/content.entity';
 import { CreateContentDto } from './dto/create-content.dto';
 import { Like } from 'src/interactions/entities/like.entity';
@@ -13,6 +14,10 @@ import { User } from 'src/modules/users/entities/user.entity';
 import { FilterContentDto, FeedType } from './dto/filter-content.dto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { Subscription } from 'src/modules/users/entities/subscription.entity';
+import { UsersService } from 'src/modules/users/users.service';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NotificationType } from 'src/notifications/entities/notification.entity';
 
 @Injectable()
 export class ContentService {
@@ -23,7 +28,21 @@ export class ContentService {
     private likeRepository: Repository<Like>,
     @InjectRepository(Comment)
     private commentRepository: Repository<Comment>,
+    @InjectRepository(User)
+    private subscriptionRepository: Repository<Subscription>,
+    private notificationsService: NotificationsService,
+    private usersService: UsersService,
   ) {}
+  private extractMentions(text: string): string[] {
+    // Match @username patterns
+    // Username can contain letters, numbers, underscores, and dots
+    // Must start with a letter, can't have consecutive dots/underscores
+    const mentionRegex = /@([a-zA-Z][\w.]*(?:[._]?[a-zA-Z0-9])*)/g;
+    const matches = text.match(mentionRegex) || [];
+
+    // Remove @ symbol and return unique usernames
+    return [...new Set(matches.map((mention) => mention.slice(1)))];
+  }
 
   async createContent(
     userId: string,
@@ -55,9 +74,9 @@ export class ContentService {
     const content = this.contentRepository.create({
       ...createContentDto,
       creatorId: userId,
-      mediaPath: this.formatMediaPath(mediaFile.path, createContentDto.type),
+      mediaPath: `uploads/content/media/${path.basename(mediaFile.path)}`,
       thumbnailPath: thumbnailFile
-        ? this.formatMediaPath(thumbnailFile.path, 'thumbnail')
+        ? `uploads/content/thumbnail/${path.basename(thumbnailFile.path)}`
         : null,
       isPublished: false,
     });
@@ -72,68 +91,65 @@ export class ContentService {
   }
 
   async getCommunityContent(filterDto: FilterContentDto, user: User) {
-    const { feed = FeedType.FOR_YOU, page = 1, limit = 10 } = filterDto;
+    try {
+      const queryBuilder = this.contentRepository
+        .createQueryBuilder('content')
+        .leftJoinAndSelect('content.creator', 'creator')
+        .orderBy('content.createdAt', 'DESC');
 
-    const queryBuilder = this.contentRepository
-      .createQueryBuilder('content')
-      .leftJoinAndSelect('content.creator', 'creator')
-      .leftJoinAndSelect('content.likes', 'likes')
-      .where('content.isPublished = :isPublished', { isPublished: true });
+      const page = filterDto.page || 1;
+      const limit = filterDto.limit || 10;
+      const skip = (page - 1) * limit;
 
-    switch (feed) {
-      case FeedType.SUBSCRIBED:
-        queryBuilder.innerJoin(
-          'user_subscriptions',
-          'sub',
-          'sub.creatorId = creator.id AND sub.subscriberId = :userId',
-          { userId: user.id },
-        );
-        break;
-      case FeedType.TRENDING:
-        queryBuilder
-          .orderBy('content.viewCount', 'DESC')
-          .addOrderBy('content.likeCount', 'DESC')
-          .andWhere('content.createdAt >= :date', {
-            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
-          });
-        break;
-      case FeedType.LIFE:
-        queryBuilder.andWhere(':tag = ANY(content.tags)', { tag: 'life' });
-        break;
-      default: // FOR_YOU
-        queryBuilder
-          .orderBy('content.createdAt', 'DESC')
-          .addOrderBy('content.likeCount', 'DESC');
-    }
+      queryBuilder.skip(skip).take(limit);
 
-    // Add pagination
-    const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
+      const [contents, total] = await queryBuilder.getManyAndCount();
 
-    const [contents, total] = await queryBuilder.getManyAndCount();
-
-    // Enrich content with user-specific data
-    const enrichedContents = await Promise.all(
-      contents.map(async (content) => ({
-        ...content,
-        isLiked: await this.hasUserLikedContent(user.id, content.id),
-        isSubscribed: await this.isUserSubscribedTo(user.id, content.creatorId),
-      })),
-    );
-
-    return {
-      success: true,
-      message: 'Content retrieved successfully',
-      data: {
-        contents: enrichedContents,
-        pagination: {
-          total,
-          page,
-          limit,
-          hasNextPage: total > skip + limit,
+      // Map contents to response format with correct paths
+      const enrichedContents = contents.map((content) => ({
+        id: content.id,
+        title: content.title,
+        description: content.description,
+        type: content.type,
+        // Update paths to match your structure
+        mediaPath: `${process.env.BASE_URL}/uploads/content/media/${path.basename(content.mediaPath)}`,
+        thumbnailPath: content.thumbnailPath
+          ? `${process.env.BASE_URL}/uploads/content/thumbnail/${path.basename(content.thumbnailPath)}`
+          : null,
+        tags: content.tags || [],
+        likeCount: content.likeCount || 0,
+        viewCount: content.viewCount || 0,
+        commentsCount: content.commentsCount || 0,
+        creator: {
+          id: content.creator?.id,
+          username: content.creator?.username,
+          profileImageUrl: content.creator?.profileImagePath
+            ? `${process.env.BASE_URL}/uploads/profile-images/${path.basename(content.creator.profileImagePath)}`
+            : null,
+          isVerified: content.creator?.isVerified || false,
         },
-      },
-    };
+        createdAt: content.createdAt,
+        isLiked: false, // You can implement this later
+        isSubscribed: false, // You can implement this later
+      }));
+
+      return {
+        success: true,
+        message: 'Content retrieved successfully',
+        data: {
+          contents: enrichedContents,
+          pagination: {
+            total,
+            page,
+            limit,
+            hasNextPage: total > skip + limit,
+          },
+        },
+      };
+    } catch (error) {
+      console.error('Error in getCommunityContent:', error);
+      throw error;
+    }
   }
 
   async publishContent(userId: string, contentId: string) {
@@ -162,6 +178,7 @@ export class ContentService {
   async likeContent(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId },
+      relations: ['creator'], // Add creator relation for notification
     });
 
     if (!content) {
@@ -182,6 +199,28 @@ export class ContentService {
       });
       await this.likeRepository.save(like);
       content.likeCount++;
+
+      // Send notification only when adding a like (not when removing)
+      if (content.creatorId !== userId) {
+        // Get the user who liked for the notification message
+        const likingUser = await this.usersService.findById(userId);
+
+        // Create notification
+        await this.notificationsService.createNotification(
+          content.creatorId,
+          NotificationType.LIKE,
+          'New Like',
+          `${likingUser.username} liked your post "${content.title}"`,
+          {
+            contentId,
+            contentType: content.type,
+            userId: likingUser.id,
+            username: likingUser.username,
+            contentTitle: content.title,
+          },
+          `/community/content/${contentId}`,
+        );
+      }
     }
 
     await this.contentRepository.save(content);
@@ -201,6 +240,7 @@ export class ContentService {
   ) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId },
+      relations: ['creator'], // Add creator relation for notification
     });
 
     if (!content) {
@@ -221,11 +261,84 @@ export class ContentService {
     content.commentsCount++;
     await this.contentRepository.save(content);
 
-    return {
-      success: true,
-      message: 'Comment added successfully',
-      data: { comment },
-    };
+    // Handle notifications
+    const commentingUser = await this.usersService.findById(userId);
+
+    // If this is a reply to another comment, notify the parent comment author
+    if (parentId) {
+      const parentComment = await this.commentRepository.findOne({
+        where: { id: parentId },
+        relations: ['user'],
+      });
+
+      if (parentComment && parentComment.userId !== userId) {
+        await this.notificationsService.createNotification(
+          parentComment.userId,
+          NotificationType.COMMENT,
+          'New Reply',
+          `${commentingUser.username} replied to your comment`,
+          {
+            contentId,
+            commentId: comment.id,
+            parentCommentId: parentId,
+            userId: commentingUser.id,
+            username: commentingUser.username,
+            contentTitle: content.title,
+            commentText: text,
+          },
+          `/community/content/${contentId}?comment=${comment.id}`,
+        );
+      }
+    }
+
+    // Notify content creator (if not self-comment)
+    if (content.creatorId !== userId) {
+      await this.notificationsService.createNotification(
+        content.creatorId,
+        NotificationType.COMMENT,
+        'New Comment',
+        `${commentingUser.username} commented on your post "${content.title}"`,
+        {
+          contentId,
+          commentId: comment.id,
+          userId: commentingUser.id,
+          username: commentingUser.username,
+          contentTitle: content.title,
+          commentText: text,
+        },
+        `/community/content/${contentId}?comment=${comment.id}`,
+      );
+    }
+
+    // Optional: Notify mentioned users
+    const mentionedUsernames = this.extractMentions(text);
+    if (mentionedUsernames.length > 0) {
+      const mentionedUsers =
+        await this.usersService.findByUsernames(mentionedUsernames);
+
+      for (const mentionedUser of mentionedUsers) {
+        if (
+          mentionedUser.id !== userId &&
+          mentionedUser.id !== content.creatorId
+        ) {
+          await this.notificationsService.createNotification(
+            mentionedUser.id,
+            NotificationType.MENTION,
+            'New Mention',
+            `${commentingUser.username} mentioned you in a comment`,
+            {
+              contentId,
+              commentId: comment.id,
+              userId: commentingUser.id,
+              username: commentingUser.username,
+              contentTitle: content.title,
+              commentText: text,
+            },
+            `/community/content/${contentId}?comment=${comment.id}`,
+          );
+        }
+      }
+    }
   }
 
   async getComments(contentId: string, userId: string) {
@@ -324,13 +437,51 @@ export class ContentService {
       message: 'Content deleted successfully',
     };
   }
+  // content.service.ts
+  async getVideoPreviews() {
+    try {
+      // Direct find approach
+      const videos = await this.contentRepository.find({
+        where: {
+          type: ContentType.VIDEO,
+        },
+        relations: ['creator'],
+        take: 2,
+      });
+
+      // console.log('Found videos:', videos);
+
+      return {
+        success: true,
+        message: 'Videos retrieved successfully',
+        data: {
+          videos: videos.map((video) => ({
+            id: video.id,
+            title: video.title,
+            mediaPath: video.mediaPath,
+            thumbnailPath: video.thumbnailPath,
+            creator: {
+              id: video.creator?.id,
+              username: video.creator?.username,
+            },
+          })),
+        },
+      };
+    } catch (error) {
+      console.error('Error fetching videos:', error);
+      throw error;
+    }
+  }
 
   private formatMediaPath(
     filePath: string,
     type: ContentType | 'thumbnail',
   ): string {
     const relativePath = filePath.replace(/\\/g, '/');
-    return `uploads/${type}/${path.basename(relativePath)}`;
+    if (type === 'thumbnail') {
+      return `uploads/content/thumbnail/${path.basename(relativePath)}`;
+    }
+    return `uploads/content/media/${path.basename(relativePath)}`;
   }
 
   private async hasUserLikedContent(
@@ -357,8 +508,14 @@ export class ContentService {
     userId: string,
     creatorId: string,
   ): Promise<boolean> {
-    // Implement based on your subscription entity
-    return false;
+    const subscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId: userId,
+        creatorId: creatorId,
+        isActive: true,
+      },
+    });
+    return !!subscription;
   }
 
   async getContentStats(userId: string) {
@@ -430,17 +587,287 @@ export class ContentService {
       data: { isLiked: !existingLike },
     };
   }
+  // In ContentService
   async getContentById(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
-      where: { id: contentId, creatorId: userId },
+      where: { id: contentId }, // Remove creatorId check
+      relations: ['creator'], // Add creator relation
     });
+
     if (!content) {
-      throw new BadRequestException('Content not found');
+      throw new NotFoundException('Content not found');
     }
+
+    // Get additional user-specific data
+    const [isLiked, isSubscribed] = await Promise.all([
+      this.hasUserLikedContent(userId, contentId),
+      this.isUserSubscribedTo(userId, content.creatorId),
+    ]);
+
+    // Format media paths
+    const formattedContent = {
+      ...content,
+
+      isLiked,
+      isSubscribed,
+    };
+
     return {
       success: true,
       message: 'Content retrieved successfully',
-      data: { content },
+      data: { content: formattedContent },
     };
+  }
+
+  // Add these methods to your ContentService class
+
+  async subscribeToCreator(userId: string, creatorId: string) {
+    // Check if already subscribed
+    const existingSubscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId: userId,
+        creatorId: creatorId,
+      },
+    });
+
+    if (existingSubscription) {
+      if (existingSubscription.isActive) {
+        throw new BadRequestException('Already subscribed to this creator');
+      }
+      // Reactivate subscription
+      existingSubscription.isActive = true;
+      await this.subscriptionRepository.save(existingSubscription);
+    } else {
+      // Create new subscription
+      const subscription = this.subscriptionRepository.create({
+        subscriberId: userId,
+        creatorId: creatorId,
+        isActive: true,
+      });
+      await this.subscriptionRepository.save(subscription);
+    }
+
+    return {
+      success: true,
+      message: 'Successfully subscribed to creator',
+    };
+  }
+
+  async unsubscribeFromCreator(subscriberId: string, creatorId: string) {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: {
+        subscriberId,
+        creatorId,
+        isActive: true,
+      },
+    });
+
+    if (!subscription) {
+      throw new BadRequestException('Not subscribed to this creator');
+    }
+
+    subscription.isActive = false;
+    await this.subscriptionRepository.save(subscription);
+
+    return {
+      success: true,
+      message: 'Successfully unsubscribed from creator',
+    };
+  }
+
+  async getSubscribedCreators(userId: string) {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: {
+        subscriberId: userId,
+        isActive: true,
+      },
+      relations: ['creator'],
+    });
+
+    return {
+      success: true,
+      message: 'Subscribed creators retrieved successfully',
+      data: {
+        creators: subscriptions.map((sub) => sub.creator),
+      },
+    };
+  }
+
+  // Add this method to get single content with subscription status
+  async getContentWithDetails(contentId: string, userId: string) {
+    const content = await this.contentRepository.findOne({
+      where: { id: contentId },
+      relations: ['creator'],
+    });
+
+    if (!content) {
+      throw new NotFoundException('Content not found');
+    }
+
+    // Get user-specific data
+    const [isLiked, isSubscribed] = await Promise.all([
+      this.hasUserLikedContent(userId, contentId),
+      this.isUserSubscribedTo(userId, content.creatorId),
+    ]);
+
+    // Increment view count
+    content.viewCount++;
+    await this.contentRepository.save(content);
+
+    return {
+      success: true,
+      message: 'Content retrieved successfully',
+      data: {
+        content: {
+          ...content,
+          isLiked,
+          isSubscribed,
+        },
+      },
+    };
+  }
+  async getSubscriptions(userId: string) {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: {
+        subscriberId: userId,
+        isActive: true,
+      },
+      relations: ['creator'],
+    });
+
+    return {
+      success: true,
+      message: 'Subscriptions retrieved successfully',
+      data: {
+        subscriptions: subscriptions.map((sub) => ({
+          id: sub.id,
+          creator: {
+            id: sub.creator.id,
+            username: sub.creator.username,
+            // Add other creator fields you want to return
+          },
+          createdAt: sub.createdAt,
+        })),
+      },
+    };
+  }
+
+  // Add this function to ContentService
+  async checkDatabaseContent() {
+    try {
+      // Get all content without any filters
+      const allContent = await this.contentRepository.find({
+        relations: ['creator'],
+      });
+
+      console.log(
+        'Database check - All content:',
+        JSON.stringify(allContent, null, 2),
+      );
+      console.log('Total content count:', allContent.length);
+
+      // Check content table structure
+      const columns = await this.contentRepository.metadata.columns;
+      console.log(
+        'Content table columns:',
+        columns.map((col) => col.propertyName),
+      );
+
+      return {
+        success: true,
+        message: 'Database check completed',
+        data: {
+          contentCount: allContent.length,
+          columns: columns.map((col) => col.propertyName),
+          sampleContent: allContent.slice(0, 3), // Show first 3 items
+        },
+      };
+    } catch (error) {
+      console.error('Error checking database:', error);
+      throw error;
+    }
+  }
+
+  async getFeedVideos(
+    initialId: string | undefined,
+    user: User,
+    page: number = 1,
+    limit: number = 10,
+  ) {
+    try {
+      // Find initial video if initialId is provided
+      let initialVideo;
+      if (initialId) {
+        initialVideo = await this.contentRepository.findOne({
+          where: { id: initialId },
+          relations: ['creator'],
+        });
+      }
+
+      // Query builder for videos only
+      const queryBuilder = this.contentRepository
+        .createQueryBuilder('content')
+        .leftJoinAndSelect('content.creator', 'creator')
+        .where('content.type = :videoType', { videoType: ContentType.VIDEO })
+        .orderBy('content.createdAt', 'DESC');
+
+      // If there's an initial video, add it to the beginning of the results
+      if (initialVideo) {
+        queryBuilder.andWhere('content.id != :initialId', {
+          initialId: initialVideo.id,
+        });
+      }
+
+      // Calculate skip for pagination
+      const skip = (page - 1) * limit;
+
+      // Get paginated results
+      const [videos, total] = await queryBuilder
+        .skip(skip)
+        .take(limit)
+        .getManyAndCount();
+
+      // Prepare final video array with initial video if it exists
+      let finalVideos = initialVideo ? [initialVideo, ...videos] : videos;
+
+      // Map the videos to include only necessary fields
+      const mappedVideos = finalVideos.map((video) => ({
+        id: video.id,
+        title: video.title,
+        description: video.description,
+        mediaPath: video.mediaPath,
+        thumbnailPath: video.thumbnailPath,
+        likeCount: video.likeCount,
+        viewCount: video.viewCount,
+        commentsCount: video.commentsCount,
+        createdAt: video.createdAt,
+        // Add isBlurred logic based on your requirements
+        isBlurred: video.creator?.isVerified && !video.isSubscribed,
+        creator: {
+          id: video.creator?.id,
+          username: video.creator?.username,
+          isVerified: video.creator?.isVerified || false,
+        },
+      }));
+
+      console.log(`Found ${videos.length} videos for page ${page}`);
+
+      return {
+        success: true,
+        message: 'Videos retrieved successfully',
+        data: {
+          videos: mappedVideos,
+          pagination: {
+            total,
+            page,
+            limit,
+            hasNextPage: total > skip + limit,
+          },
+        },
+      };
+    } catch (error) {
+      console.error('Error in getFeedVideos:', error);
+      throw error;
+    }
   }
 }

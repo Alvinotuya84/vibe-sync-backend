@@ -95,7 +95,7 @@ export class InteractionsService {
     return {
       success: true,
       message: existingLike ? 'Like removed' : 'Comment liked',
-      data: { isLiked: !existingLike, likesCount: comment.likeCount },
+      data: { isLiked: !existingLike, likeCount: comment.likeCount },
     };
   }
 

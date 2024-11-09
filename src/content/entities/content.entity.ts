@@ -1,6 +1,6 @@
-import { Comment } from 'src/interactions/entities/comment.entity';
-import { Like } from 'src/interactions/entities/like.entity';
-import { User } from 'src/modules/users/entities/user.entity';
+import { Comment } from '../../interactions/entities/comment.entity';
+import { Like } from '../../interactions/entities/like.entity';
+import { User } from '../../modules/users/entities/user.entity';
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -40,7 +40,7 @@ export class Content {
   @Column({ nullable: true })
   thumbnailPath: string;
 
-  @Column('simple-array', { default: [] })
+  @Column('text', { array: true, default: [] })
   tags: string[];
 
   @Column({ default: false })

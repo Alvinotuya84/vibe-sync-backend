@@ -53,6 +53,15 @@ export class User {
   @Column({ nullable: true })
   website: string;
 
+  // New subscriberId column
+  @Column({ nullable: true, unique: true })
+  subscriberId?: string;
+
+  @Column({ nullable: true })
+  creatorId?: string;
+  @Column({ default: true })
+  isActive: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 
@@ -66,6 +75,7 @@ export class User {
       this.password = await bcrypt.hash(this.password, salt);
     }
   }
+
   async updatePassword(newPassword: string) {
     const salt = await bcrypt.genSalt();
     this.password = await bcrypt.hash(newPassword, salt);
