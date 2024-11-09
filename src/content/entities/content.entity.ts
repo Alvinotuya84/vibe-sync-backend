@@ -47,6 +47,9 @@ export class Content {
   viewCount: number;
 
   @Column({ default: 0 })
+  commentsCount: number;
+
+  @Column({ default: 0 })
   likeCount: number;
 
   @ManyToOne(() => User)
