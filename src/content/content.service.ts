@@ -15,6 +15,9 @@ import { FilterContentDto, FeedType } from './dto/filter-content.dto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Subscription } from 'src/modules/users/entities/subscription.entity';
+import { UsersService } from 'src/modules/users/users.service';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NotificationType } from 'src/notifications/entities/notification.entity';
 
 @Injectable()
 export class ContentService {
@@ -27,7 +30,19 @@ export class ContentService {
     private commentRepository: Repository<Comment>,
     @InjectRepository(User)
     private subscriptionRepository: Repository<Subscription>,
+    private notificationsService: NotificationsService,
+    private usersService: UsersService,
   ) {}
+  private extractMentions(text: string): string[] {
+    // Match @username patterns
+    // Username can contain letters, numbers, underscores, and dots
+    // Must start with a letter, can't have consecutive dots/underscores
+    const mentionRegex = /@([a-zA-Z][\w.]*(?:[._]?[a-zA-Z0-9])*)/g;
+    const matches = text.match(mentionRegex) || [];
+
+    // Remove @ symbol and return unique usernames
+    return [...new Set(matches.map((mention) => mention.slice(1)))];
+  }
 
   async createContent(
     userId: string,
@@ -163,6 +178,7 @@ export class ContentService {
   async likeContent(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId },
+      relations: ['creator'], // Add creator relation for notification
     });
 
     if (!content) {
@@ -183,6 +199,28 @@ export class ContentService {
       });
       await this.likeRepository.save(like);
       content.likeCount++;
+
+      // Send notification only when adding a like (not when removing)
+      if (content.creatorId !== userId) {
+        // Get the user who liked for the notification message
+        const likingUser = await this.usersService.findById(userId);
+
+        // Create notification
+        await this.notificationsService.createNotification(
+          content.creatorId,
+          NotificationType.LIKE,
+          'New Like',
+          `${likingUser.username} liked your post "${content.title}"`,
+          {
+            contentId,
+            contentType: content.type,
+            userId: likingUser.id,
+            username: likingUser.username,
+            contentTitle: content.title,
+          },
+          `/community/content/${contentId}`,
+        );
+      }
     }
 
     await this.contentRepository.save(content);
@@ -202,6 +240,7 @@ export class ContentService {
   ) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId },
+      relations: ['creator'], // Add creator relation for notification
     });
 
     if (!content) {
@@ -222,11 +261,84 @@ export class ContentService {
     content.commentsCount++;
     await this.contentRepository.save(content);
 
-    return {
-      success: true,
-      message: 'Comment added successfully',
-      data: { comment },
-    };
+    // Handle notifications
+    const commentingUser = await this.usersService.findById(userId);
+
+    // If this is a reply to another comment, notify the parent comment author
+    if (parentId) {
+      const parentComment = await this.commentRepository.findOne({
+        where: { id: parentId },
+        relations: ['user'],
+      });
+
+      if (parentComment && parentComment.userId !== userId) {
+        await this.notificationsService.createNotification(
+          parentComment.userId,
+          NotificationType.COMMENT,
+          'New Reply',
+          `${commentingUser.username} replied to your comment`,
+          {
+            contentId,
+            commentId: comment.id,
+            parentCommentId: parentId,
+            userId: commentingUser.id,
+            username: commentingUser.username,
+            contentTitle: content.title,
+            commentText: text,
+          },
+          `/community/content/${contentId}?comment=${comment.id}`,
+        );
+      }
+    }
+
+    // Notify content creator (if not self-comment)
+    if (content.creatorId !== userId) {
+      await this.notificationsService.createNotification(
+        content.creatorId,
+        NotificationType.COMMENT,
+        'New Comment',
+        `${commentingUser.username} commented on your post "${content.title}"`,
+        {
+          contentId,
+          commentId: comment.id,
+          userId: commentingUser.id,
+          username: commentingUser.username,
+          contentTitle: content.title,
+          commentText: text,
+        },
+        `/community/content/${contentId}?comment=${comment.id}`,
+      );
+    }
+
+    // Optional: Notify mentioned users
+    const mentionedUsernames = this.extractMentions(text);
+    if (mentionedUsernames.length > 0) {
+      const mentionedUsers =
+        await this.usersService.findByUsernames(mentionedUsernames);
+
+      for (const mentionedUser of mentionedUsers) {
+        if (
+          mentionedUser.id !== userId &&
+          mentionedUser.id !== content.creatorId
+        ) {
+          await this.notificationsService.createNotification(
+            mentionedUser.id,
+            NotificationType.MENTION,
+            'New Mention',
+            `${commentingUser.username} mentioned you in a comment`,
+            {
+              contentId,
+              commentId: comment.id,
+              userId: commentingUser.id,
+              username: commentingUser.username,
+              contentTitle: content.title,
+              commentText: text,
+            },
+            `/community/content/${contentId}?comment=${comment.id}`,
+          );
+        }
+      }
+    }
   }
 
   async getComments(contentId: string, userId: string) {
