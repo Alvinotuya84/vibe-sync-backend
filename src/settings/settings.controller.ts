@@ -17,6 +17,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import * as path from 'path';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { GetUser } from 'src/modules/auth/decorators/get-user.decorator';
+import { UpdatePasswordDto } from './dto/update-password.dto';
 
 @Controller('settings')
 @UseGuards(JwtAuthGuard)
@@ -61,5 +62,12 @@ export class SettingsController {
   @Post('confirm-verification')
   async confirmVerification(@GetUser('id') userId: string) {
     return this.settingsService.confirmVerification(userId);
+  }
+  @Patch('password')
+  async updatePassword(
+    @GetUser('id') userId: string,
+    @Body() updatePasswordDto: UpdatePasswordDto,
+  ) {
+    return this.settingsService.updatePassword(userId, updatePasswordDto);
   }
 }

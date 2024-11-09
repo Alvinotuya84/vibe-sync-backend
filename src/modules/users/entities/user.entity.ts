@@ -60,12 +60,15 @@ export class User {
   updatedAt: Date;
 
   @BeforeInsert()
-  @BeforeUpdate()
   async hashPassword() {
     if (this.password) {
       const salt = await bcrypt.genSalt();
       this.password = await bcrypt.hash(this.password, salt);
     }
+  }
+  async updatePassword(newPassword: string) {
+    const salt = await bcrypt.genSalt();
+    this.password = await bcrypt.hash(newPassword, salt);
   }
 
   async validatePassword(password: string): Promise<boolean> {
