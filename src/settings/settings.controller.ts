@@ -18,6 +18,7 @@ import * as path from 'path';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { GetUser } from 'src/modules/auth/decorators/get-user.decorator';
 import { UpdatePasswordDto } from './dto/update-password.dto';
+import * as fs from 'fs';
 
 @Controller('settings')
 @UseGuards(JwtAuthGuard)
@@ -36,7 +37,14 @@ export class SettingsController {
   @UseInterceptors(
     FileInterceptor('image', {
       storage: diskStorage({
-        destination: './uploads/profile-images',
+        destination: (req, file, cb) => {
+          const uploadPath = './uploads/profile-images';
+          // Ensure the directory exists before attempting to save
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
         filename: (req, file, cb) => {
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
           cb(

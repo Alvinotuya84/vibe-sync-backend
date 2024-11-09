@@ -49,12 +49,14 @@ export class ContentController {
       {
         storage: diskStorage({
           destination: (req, file, cb) => {
-            // Set correct destination based on file field
-            const dest =
-              file.fieldname === 'thumbnail'
-                ? UPLOAD_PATHS.CONTENT.THUMBNAILS
-                : UPLOAD_PATHS.CONTENT.MEDIA;
-            cb(null, dest);
+            cb(null, `./uploads/content/${file.fieldname}`);
+          },
+          filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(
+              null,
+              `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`,
+            );
           },
         }),
         fileFilter: (req, file, cb) => {

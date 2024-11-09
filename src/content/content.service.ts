@@ -108,7 +108,7 @@ export class ContentService {
           id: content.creator?.id,
           username: content.creator?.username,
           profileImageUrl: content.creator?.profileImagePath
-            ? `${process.env.BASE_URL}/uploads/profile/${path.basename(content.creator.profileImagePath)}`
+            ? `${process.env.BASE_URL}/uploads/profile-images/${path.basename(content.creator.profileImagePath)}`
             : null,
           isVerified: content.creator?.isVerified || false,
         },
