@@ -12,6 +12,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ContentModule } from './content/content.module';
 import { InteractionsModule } from './interactions/interactions.module';
+import { DatabaseModule } from 'database/database.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { InteractionsModule } from './interactions/interactions.module';
     SettingsModule,
     ContentModule,
     InteractionsModule,
+    DatabaseModule,
   ],
   controllers: [AppController], // Add this
   providers: [AppService], // Add this

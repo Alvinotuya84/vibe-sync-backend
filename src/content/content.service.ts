@@ -58,9 +58,9 @@ export class ContentService {
     const content = this.contentRepository.create({
       ...createContentDto,
       creatorId: userId,
-      mediaPath: this.formatMediaPath(mediaFile.path, createContentDto.type),
+      mediaPath: `uploads/content/media/${path.basename(mediaFile.path)}`,
       thumbnailPath: thumbnailFile
-        ? this.formatMediaPath(thumbnailFile.path, 'thumbnail')
+        ? `uploads/content/thumbnail/${path.basename(thumbnailFile.path)}`
         : null,
       isPublished: false,
     });
@@ -75,101 +75,67 @@ export class ContentService {
   }
 
   async getCommunityContent(filterDto: FilterContentDto, user: User) {
-    const { feed = FeedType.FOR_YOU, page = 1, limit = 10 } = filterDto;
+    try {
+      const queryBuilder = this.contentRepository
+        .createQueryBuilder('content')
+        .leftJoinAndSelect('content.creator', 'creator')
+        .orderBy('content.createdAt', 'DESC');
 
-    // Create base query
-    const queryBuilder = this.contentRepository
-      .createQueryBuilder('content')
-      .leftJoinAndSelect('content.creator', 'creator')
-      .where('content.isPublished = :isPublished', { isPublished: true });
+      const page = filterDto.page || 1;
+      const limit = filterDto.limit || 10;
+      const skip = (page - 1) * limit;
 
-    // Apply feed-specific filters
-    switch (feed) {
-      case FeedType.SUBSCRIBED:
-        queryBuilder.innerJoin(
-          'user_subscriptions',
-          'sub',
-          'sub.creatorId = content.creatorId AND sub.subscriberId = :userId AND sub.isActive = :isActive',
-          { userId: user.id, isActive: true },
-        );
-        break;
+      queryBuilder.skip(skip).take(limit);
 
-      case FeedType.TRENDING:
-        queryBuilder
-          .orderBy('content.viewCount', 'DESC')
-          .addOrderBy('content.likeCount', 'DESC')
-          .andWhere('content.createdAt >= :date', {
-            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
-          });
-        break;
+      const [contents, total] = await queryBuilder.getManyAndCount();
 
-      case FeedType.LIFE:
-        // If tags is a JSON array
-        queryBuilder.andWhere(':tag = ANY(content.tags)', { tag: 'life' });
-        break;
+      // Map contents to response format with correct paths
+      const enrichedContents = contents.map((content) => ({
+        id: content.id,
+        title: content.title,
+        description: content.description,
+        type: content.type,
+        // Update paths to match your structure
+        mediaPath: `${process.env.BASE_URL}/uploads/content/media/${path.basename(content.mediaPath)}`,
+        thumbnailPath: content.thumbnailPath
+          ? `${process.env.BASE_URL}/uploads/content/thumbnail/${path.basename(content.thumbnailPath)}`
+          : null,
+        tags: content.tags || [],
+        likeCount: content.likeCount || 0,
+        viewCount: content.viewCount || 0,
+        commentsCount: content.commentsCount || 0,
+        creator: {
+          id: content.creator?.id,
+          username: content.creator?.username,
+          profileImageUrl: content.creator?.profileImagePath
+            ? `${process.env.BASE_URL}/uploads/profile/${path.basename(content.creator.profileImagePath)}`
+            : null,
+          isVerified: content.creator?.isVerified || false,
+        },
+        createdAt: content.createdAt,
+        isLiked: false, // You can implement this later
+        isSubscribed: false, // You can implement this later
+      }));
 
-      case FeedType.FOR_YOU:
-      default:
-        // Default sorting for "For You" feed
-        queryBuilder
-          .orderBy('content.createdAt', 'DESC')
-          .addOrderBy('content.likeCount', 'DESC');
-        break;
+      return {
+        success: true,
+        message: 'Content retrieved successfully',
+        data: {
+          contents: enrichedContents,
+          pagination: {
+            total,
+            page,
+            limit,
+            hasNextPage: total > skip + limit,
+          },
+        },
+      };
+    } catch (error) {
+      console.error('Error in getCommunityContent:', error);
+      throw error;
     }
-
-    // Add pagination
-    const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
-
-    // Execute query
-    const [contents, total] = await queryBuilder.getManyAndCount();
-
-    // Get all likes and subscriptions in bulk
-    const [userLikes, userSubscriptions] = await Promise.all([
-      this.likeRepository.find({
-        where: {
-          userId: user.id,
-          contentId: In(contents.map((c) => c.id)),
-        },
-      }),
-      this.subscriptionRepository.find({
-        where: {
-          subscriberId: user.id,
-          creatorId: In(contents.map((c) => c.creatorId)),
-          isActive: true,
-        },
-      }),
-    ]);
-
-    // Create sets for O(1) lookup
-    const likedContentIds = new Set(userLikes.map((like) => like.contentId));
-    const subscribedCreatorIds = new Set(
-      userSubscriptions.map((sub) => sub.creatorId),
-    );
-
-    // Enrich content
-    const enrichedContents = await Promise.all(
-      contents.map(async (content) => ({
-        ...content,
-        isLiked: await this.hasUserLikedContent(user.id, content.id),
-        isSubscribed: await this.isUserSubscribedTo(user.id, content.creatorId),
-      })),
-    );
-
-    return {
-      success: true,
-      message: 'Content retrieved successfully',
-      data: {
-        contents: enrichedContents,
-        pagination: {
-          total,
-          page,
-          limit,
-          hasNextPage: total > skip + limit,
-        },
-      },
-    };
   }
+
   async publishContent(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId, creatorId: userId },
@@ -364,7 +330,10 @@ export class ContentService {
     type: ContentType | 'thumbnail',
   ): string {
     const relativePath = filePath.replace(/\\/g, '/');
-    return `uploads/${type}/${path.basename(relativePath)}`;
+    if (type === 'thumbnail') {
+      return `uploads/content/thumbnail/${path.basename(relativePath)}`;
+    }
+    return `uploads/content/media/${path.basename(relativePath)}`;
   }
 
   private async hasUserLikedContent(
@@ -615,5 +584,41 @@ export class ContentService {
         })),
       },
     };
+  }
+
+  // Add this function to ContentService
+  async checkDatabaseContent() {
+    try {
+      // Get all content without any filters
+      const allContent = await this.contentRepository.find({
+        relations: ['creator'],
+      });
+
+      console.log(
+        'Database check - All content:',
+        JSON.stringify(allContent, null, 2),
+      );
+      console.log('Total content count:', allContent.length);
+
+      // Check content table structure
+      const columns = await this.contentRepository.metadata.columns;
+      console.log(
+        'Content table columns:',
+        columns.map((col) => col.propertyName),
+      );
+
+      return {
+        success: true,
+        message: 'Database check completed',
+        data: {
+          contentCount: allContent.length,
+          columns: columns.map((col) => col.propertyName),
+          sampleContent: allContent.slice(0, 3), // Show first 3 items
+        },
+      };
+    } catch (error) {
+      console.error('Error checking database:', error);
+      throw error;
+    }
   }
 }
