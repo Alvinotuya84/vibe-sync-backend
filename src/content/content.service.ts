@@ -2,9 +2,10 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, QueryFailedError, EntityNotFoundError } from 'typeorm';
 import { Content, ContentType } from './entities/content.entity';
 import { CreateContentDto } from './dto/create-content.dto';
 import { Like } from 'src/interactions/entities/like.entity';
@@ -324,6 +325,40 @@ export class ContentService {
       message: 'Content deleted successfully',
     };
   }
+  // content.service.ts
+  async getVideoPreviews() {
+    try {
+      // Direct find approach
+      const videos = await this.contentRepository.find({
+        where: {
+          type: ContentType.VIDEO,
+        },
+        relations: ['creator'],
+      });
+
+      // console.log('Found videos:', videos);
+
+      return {
+        success: true,
+        message: 'Videos retrieved successfully',
+        data: {
+          videos: videos.map((video) => ({
+            id: video.id,
+            title: video.title,
+            mediaPath: video.mediaPath,
+            thumbnailPath: video.thumbnailPath,
+            creator: {
+              id: video.creator?.id,
+              username: video.creator?.username,
+            },
+          })),
+        },
+      };
+    } catch (error) {
+      console.error('Error fetching videos:', error);
+      throw error;
+    }
+  }
 
   private formatMediaPath(
     filePath: string,
@@ -618,6 +653,89 @@ export class ContentService {
       };
     } catch (error) {
       console.error('Error checking database:', error);
+      throw error;
+    }
+  }
+
+  async getFeedVideos(
+    initialId: string | undefined,
+    user: User,
+    page: number = 1,
+    limit: number = 10,
+  ) {
+    try {
+      // Find initial video if initialId is provided
+      let initialVideo;
+      if (initialId) {
+        initialVideo = await this.contentRepository.findOne({
+          where: { id: initialId },
+          relations: ['creator'],
+        });
+      }
+
+      // Query builder for videos only
+      const queryBuilder = this.contentRepository
+        .createQueryBuilder('content')
+        .leftJoinAndSelect('content.creator', 'creator')
+        .where('content.type = :videoType', { videoType: ContentType.VIDEO })
+        .orderBy('content.createdAt', 'DESC');
+
+      // If there's an initial video, add it to the beginning of the results
+      if (initialVideo) {
+        queryBuilder.andWhere('content.id != :initialId', {
+          initialId: initialVideo.id,
+        });
+      }
+
+      // Calculate skip for pagination
+      const skip = (page - 1) * limit;
+
+      // Get paginated results
+      const [videos, total] = await queryBuilder
+        .skip(skip)
+        .take(limit)
+        .getManyAndCount();
+
+      // Prepare final video array with initial video if it exists
+      let finalVideos = initialVideo ? [initialVideo, ...videos] : videos;
+
+      // Map the videos to include only necessary fields
+      const mappedVideos = finalVideos.map((video) => ({
+        id: video.id,
+        title: video.title,
+        description: video.description,
+        mediaPath: video.mediaPath,
+        thumbnailPath: video.thumbnailPath,
+        likeCount: video.likeCount,
+        viewCount: video.viewCount,
+        commentsCount: video.commentsCount,
+        createdAt: video.createdAt,
+        // Add isBlurred logic based on your requirements
+        isBlurred: video.creator?.isVerified && !video.isSubscribed,
+        creator: {
+          id: video.creator?.id,
+          username: video.creator?.username,
+          isVerified: video.creator?.isVerified || false,
+        },
+      }));
+
+      console.log(`Found ${videos.length} videos for page ${page}`);
+
+      return {
+        success: true,
+        message: 'Videos retrieved successfully',
+        data: {
+          videos: mappedVideos,
+          pagination: {
+            total,
+            page,
+            limit,
+            hasNextPage: total > skip + limit,
+          },
+        },
+      };
+    } catch (error) {
+      console.error('Error in getFeedVideos:', error);
       throw error;
     }
   }
