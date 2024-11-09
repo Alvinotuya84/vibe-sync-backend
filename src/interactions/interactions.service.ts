@@ -80,14 +80,14 @@ export class InteractionsService {
 
     if (existingLike) {
       await this.likesRepository.remove(existingLike);
-      comment.likesCount--;
+      comment.likeCount--;
     } else {
       const newLike = this.likesRepository.create({
         userId,
         commentId,
       });
       await this.likesRepository.save(newLike);
-      comment.likesCount++;
+      comment.likeCount++;
     }
 
     await this.commentsRepository.save(comment);
@@ -95,7 +95,7 @@ export class InteractionsService {
     return {
       success: true,
       message: existingLike ? 'Like removed' : 'Comment liked',
-      data: { isLiked: !existingLike, likesCount: comment.likesCount },
+      data: { isLiked: !existingLike, likesCount: comment.likeCount },
     };
   }
 
@@ -170,32 +170,42 @@ export class InteractionsService {
       throw new NotFoundException('Content not found');
     }
 
-    let parentComment: Comment | null = null;
+    let parent: Comment | null = null;
     if (createCommentDto.parentCommentId) {
-      parentComment = await this.commentsRepository.findOne({
+      parent = await this.commentsRepository.findOne({
         where: { id: createCommentDto.parentCommentId },
       });
-      if (!parentComment) {
+      if (!parent) {
         throw new NotFoundException('Parent comment not found');
       }
     }
 
+    // Create comment with the correct property names matching the entity
     const comment = this.commentsRepository.create({
       text: createCommentDto.text,
-      user: { id: userId },
-      content: { id: createCommentDto.contentId },
-      parentComment,
+      userId: userId,
+      contentId: createCommentDto.contentId,
+      parentId: parent?.id || null,
+      likeCount: 0,
     });
 
-    await this.commentsRepository.save(comment);
+    // Save the new comment
+    const savedComment = await this.commentsRepository.save(comment);
 
+    // Load the comment with relations for the response
+    const commentWithRelations = await this.commentsRepository.findOne({
+      where: { id: savedComment.id },
+      relations: ['user', 'content', 'parent'],
+    });
+
+    // Update content comments count
     content.commentsCount++;
     await this.contentRepository.save(content);
 
     return {
       success: true,
       message: 'Comment created successfully',
-      data: { comment },
+      data: { comment: commentWithRelations },
     };
   }
 }

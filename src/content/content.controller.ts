@@ -9,6 +9,7 @@ import {
   Delete,
   Param,
   Get,
+  Query,
   BadRequestException,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
@@ -21,6 +22,8 @@ import * as path from 'path';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { GetUser } from 'src/modules/auth/decorators/get-user.decorator';
 import { ensureDirectoryExists, UPLOAD_PATHS } from '../utils/file.utils';
+import { FilterContentDto } from './dto/filter-content.dto';
+import { User } from 'src/modules/users/entities/user.entity';
 
 @Controller('content')
 @UseGuards(JwtAuthGuard)
@@ -120,5 +123,38 @@ export class ContentController {
     @Param('id') contentId: string,
   ) {
     return this.contentService.deleteContent(userId, contentId);
+  }
+
+  @Get('community')
+  async getCommunityContent(
+    @Query() filterDto: FilterContentDto,
+    @GetUser() user: User,
+  ) {
+    return this.contentService.getCommunityContent(filterDto, user);
+  }
+
+  @Get(':id')
+  async getContentById(@Param('id') id: string, @GetUser() user: User) {
+    return this.contentService.getContentById(user.id, id);
+  }
+
+  @Post(':id/like')
+  async likeContent(@Param('id') id: string, @GetUser() user: User) {
+    return this.contentService.likeContent(user.id, id);
+  }
+
+  @Get(':id/comments')
+  async getComments(@Param('id') id: string, @GetUser() user: User) {
+    return this.contentService.getComments(id, user.id);
+  }
+
+  @Post(':id/comments')
+  async addComment(
+    @Param('id') id: string,
+    @GetUser() user: User,
+    @Body('text') text: string,
+    @Body('parentId') parentId?: string,
+  ) {
+    return this.contentService.addComment(user.id, id, text, parentId);
   }
 }

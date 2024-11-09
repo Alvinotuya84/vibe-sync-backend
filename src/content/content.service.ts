@@ -1,8 +1,16 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Content, ContentType } from './entities/content.entity';
 import { CreateContentDto } from './dto/create-content.dto';
+import { Like } from 'src/interactions/entities/like.entity';
+import { Comment } from 'src/interactions/entities/comment.entity';
+import { User } from 'src/modules/users/entities/user.entity';
+import { FilterContentDto, FeedType } from './dto/filter-content.dto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -11,6 +19,10 @@ export class ContentService {
   constructor(
     @InjectRepository(Content)
     private contentRepository: Repository<Content>,
+    @InjectRepository(Like)
+    private likeRepository: Repository<Like>,
+    @InjectRepository(Comment)
+    private commentRepository: Repository<Comment>,
   ) {}
 
   async createContent(
@@ -26,7 +38,6 @@ export class ContentService {
           'Invalid file type. Expected video file.',
         );
       }
-      // Require thumbnail for videos
       if (!thumbnailFile) {
         throw new BadRequestException(
           'Thumbnail is required for video content.',
@@ -40,7 +51,7 @@ export class ContentService {
       }
     }
 
-    // Create content with proper paths based on content type
+    // Create content with proper paths
     const content = this.contentRepository.create({
       ...createContentDto,
       creatorId: userId,
@@ -48,7 +59,7 @@ export class ContentService {
       thumbnailPath: thumbnailFile
         ? this.formatMediaPath(thumbnailFile.path, 'thumbnail')
         : null,
-      isPublished: false, // Always start as draft
+      isPublished: false,
     });
 
     await this.contentRepository.save(content);
@@ -60,13 +71,69 @@ export class ContentService {
     };
   }
 
-  private formatMediaPath(
-    filePath: string,
-    type: ContentType | 'thumbnail',
-  ): string {
-    // Ensure consistent path format and organize by content type
-    const relativePath = filePath.replace(/\\/g, '/');
-    return `uploads/${type}/${path.basename(relativePath)}`;
+  async getCommunityContent(filterDto: FilterContentDto, user: User) {
+    const { feed = FeedType.FOR_YOU, page = 1, limit = 10 } = filterDto;
+
+    const queryBuilder = this.contentRepository
+      .createQueryBuilder('content')
+      .leftJoinAndSelect('content.creator', 'creator')
+      .leftJoinAndSelect('content.likes', 'likes')
+      .where('content.isPublished = :isPublished', { isPublished: true });
+
+    switch (feed) {
+      case FeedType.SUBSCRIBED:
+        queryBuilder.innerJoin(
+          'user_subscriptions',
+          'sub',
+          'sub.creatorId = creator.id AND sub.subscriberId = :userId',
+          { userId: user.id },
+        );
+        break;
+      case FeedType.TRENDING:
+        queryBuilder
+          .orderBy('content.viewCount', 'DESC')
+          .addOrderBy('content.likeCount', 'DESC')
+          .andWhere('content.createdAt >= :date', {
+            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
+          });
+        break;
+      case FeedType.LIFE:
+        queryBuilder.andWhere(':tag = ANY(content.tags)', { tag: 'life' });
+        break;
+      default: // FOR_YOU
+        queryBuilder
+          .orderBy('content.createdAt', 'DESC')
+          .addOrderBy('content.likeCount', 'DESC');
+    }
+
+    // Add pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.skip(skip).take(limit);
+
+    const [contents, total] = await queryBuilder.getManyAndCount();
+
+    // Enrich content with user-specific data
+    const enrichedContents = await Promise.all(
+      contents.map(async (content) => ({
+        ...content,
+        isLiked: await this.hasUserLikedContent(user.id, content.id),
+        isSubscribed: await this.isUserSubscribedTo(user.id, content.creatorId),
+      })),
+    );
+
+    return {
+      success: true,
+      message: 'Content retrieved successfully',
+      data: {
+        contents: enrichedContents,
+        pagination: {
+          total,
+          page,
+          limit,
+          hasNextPage: total > skip + limit,
+        },
+      },
+    };
   }
 
   async publishContent(userId: string, contentId: string) {
@@ -75,10 +142,9 @@ export class ContentService {
     });
 
     if (!content) {
-      throw new BadRequestException('Content not found');
+      throw new NotFoundException('Content not found');
     }
 
-    // Additional validation before publishing
     if (content.type === ContentType.VIDEO && !content.thumbnailPath) {
       throw new BadRequestException('Cannot publish video without thumbnail');
     }
@@ -93,38 +159,136 @@ export class ContentService {
     };
   }
 
+  async likeContent(userId: string, contentId: string) {
+    const content = await this.contentRepository.findOne({
+      where: { id: contentId },
+    });
+
+    if (!content) {
+      throw new NotFoundException('Content not found');
+    }
+
+    const existingLike = await this.likeRepository.findOne({
+      where: { userId, contentId },
+    });
+
+    if (existingLike) {
+      await this.likeRepository.remove(existingLike);
+      content.likeCount--;
+    } else {
+      const like = this.likeRepository.create({
+        userId,
+        contentId,
+      });
+      await this.likeRepository.save(like);
+      content.likeCount++;
+    }
+
+    await this.contentRepository.save(content);
+
+    return {
+      success: true,
+      message: existingLike ? 'Content unliked' : 'Content liked',
+      data: { isLiked: !existingLike },
+    };
+  }
+
+  async addComment(
+    userId: string,
+    contentId: string,
+    text: string,
+    parentId?: string,
+  ) {
+    const content = await this.contentRepository.findOne({
+      where: { id: contentId },
+    });
+
+    if (!content) {
+      throw new NotFoundException('Content not found');
+    }
+
+    const commentData: Partial<Comment> = {
+      text,
+      userId,
+      contentId,
+      parentId,
+    };
+
+    const comment = this.commentRepository.create(commentData);
+    await this.commentRepository.save(comment);
+
+    // Update content comments count
+    content.commentsCount++;
+    await this.contentRepository.save(content);
+
+    return {
+      success: true,
+      message: 'Comment added successfully',
+      data: { comment },
+    };
+  }
+
+  async getComments(contentId: string, userId: string) {
+    const comments = await this.commentRepository.find({
+      where: {
+        contentId,
+        parentId: null, // Get only top-level comments
+      },
+      relations: ['user', 'replies', 'replies.user'],
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+
+    // Get all comment IDs (including replies) for like checking
+    const allCommentIds = comments.reduce((acc, comment) => {
+      acc.push(comment.id);
+      comment.replies?.forEach((reply) => acc.push(reply.id));
+      return acc;
+    }, [] as string[]);
+
+    // Get all likes for these comments in one query
+    const likes = await this.likeRepository.find({
+      where: {
+        userId,
+        commentId: In(allCommentIds),
+      },
+    });
+
+    const likedCommentIds = new Set(likes.map((like) => like.commentId));
+
+    const enrichedComments = comments.map((comment) => ({
+      ...comment,
+      isLiked: likedCommentIds.has(comment.id),
+      replies:
+        comment.replies?.map((reply) => ({
+          ...reply,
+          isLiked: likedCommentIds.has(reply.id),
+        })) || [],
+    }));
+
+    return {
+      success: true,
+      message: 'Comments retrieved successfully',
+      data: { comments: enrichedComments },
+    };
+  }
+
   async getDraftContent(userId: string) {
     const drafts = await this.contentRepository.find({
       where: { creatorId: userId, isPublished: false },
       order: { createdAt: 'DESC' },
     });
 
-    // Group drafts by content type for better organization
-    const groupedDrafts = {
-      videos: drafts.filter((draft) => draft.type === ContentType.VIDEO),
-      images: drafts.filter((draft) => draft.type === ContentType.IMAGE),
-    };
-
     return {
       success: true,
       message: 'Drafts retrieved successfully',
-      data: { drafts: groupedDrafts },
-    };
-  }
-
-  async getContentById(userId: string, contentId: string) {
-    const content = await this.contentRepository.findOne({
-      where: { id: contentId, creatorId: userId },
-    });
-
-    if (!content) {
-      throw new BadRequestException('Content not found');
-    }
-
-    return {
-      success: true,
-      message: 'Content retrieved successfully',
-      data: { content },
+      data: {
+        drafts: {
+          videos: drafts.filter((d) => d.type === ContentType.VIDEO),
+          images: drafts.filter((d) => d.type === ContentType.IMAGE),
+        },
+      },
     };
   }
 
@@ -134,7 +298,7 @@ export class ContentService {
     });
 
     if (!content) {
-      throw new BadRequestException('Content not found');
+      throw new NotFoundException('Content not found');
     }
 
     // Delete media files
@@ -148,37 +312,135 @@ export class ContentService {
       }
     } catch (error) {
       console.error('Error deleting content files:', error);
-      // Continue with content deletion even if file deletion fails
     }
 
+    // Delete associated likes and comments
+    await this.likeRepository.delete({ contentId });
+    await this.commentRepository.delete({ contentId });
     await this.contentRepository.remove(content);
 
     return {
       success: true,
       message: 'Content deleted successfully',
-      data: null,
     };
   }
 
-  // Helper method to get content stats
+  private formatMediaPath(
+    filePath: string,
+    type: ContentType | 'thumbnail',
+  ): string {
+    const relativePath = filePath.replace(/\\/g, '/');
+    return `uploads/${type}/${path.basename(relativePath)}`;
+  }
+
+  private async hasUserLikedContent(
+    userId: string,
+    contentId: string,
+  ): Promise<boolean> {
+    const like = await this.likeRepository.findOne({
+      where: { userId, contentId },
+    });
+    return !!like;
+  }
+
+  private async hasUserLikedComment(
+    userId: string,
+    commentId: string,
+  ): Promise<boolean> {
+    const like = await this.likeRepository.findOne({
+      where: { userId, commentId },
+    });
+    return !!like;
+  }
+
+  private async isUserSubscribedTo(
+    userId: string,
+    creatorId: string,
+  ): Promise<boolean> {
+    // Implement based on your subscription entity
+    return false;
+  }
+
   async getContentStats(userId: string) {
-    const [videos, images] = await Promise.all([
-      this.contentRepository.count({
-        where: { creatorId: userId, type: ContentType.VIDEO },
-      }),
-      this.contentRepository.count({
-        where: { creatorId: userId, type: ContentType.IMAGE },
-      }),
-    ]);
+    const stats = await this.contentRepository
+      .createQueryBuilder('content')
+      .where('content.creatorId = :userId', { userId })
+      .select([
+        'COUNT(*) as totalContent',
+        'SUM(CASE WHEN type = :videoType THEN 1 ELSE 0 END) as videoCount',
+        'SUM(CASE WHEN type = :imageType THEN 1 ELSE 0 END) as imageCount',
+        'SUM("likeCount") as totalLikes',
+        'SUM("viewCount") as totalViews',
+        'SUM("commentsCount") as totalComments',
+      ])
+      .setParameters({
+        videoType: ContentType.VIDEO,
+        imageType: ContentType.IMAGE,
+      })
+      .getRawOne();
 
     return {
       success: true,
       message: 'Content stats retrieved successfully',
-      data: {
-        totalContent: videos + images,
-        videoCount: videos,
-        imageCount: images,
+      data: stats,
+    };
+  }
+  async deleteComments(contentId: string) {
+    // First delete all replies
+    await this.commentRepository
+      .createQueryBuilder()
+      .delete()
+      .from(Comment)
+      .where('contentId = :contentId', { contentId })
+      .execute();
+  }
+  async likeComment(userId: string, commentId: string) {
+    const comment = await this.commentRepository.findOne({
+      where: { id: commentId },
+    });
+
+    if (!comment) {
+      throw new NotFoundException('Comment not found');
+    }
+
+    const existingLike = await this.likeRepository.findOne({
+      where: {
+        userId,
+        commentId,
       },
+    });
+
+    if (existingLike) {
+      await this.likeRepository.remove(existingLike);
+      comment.likeCount--;
+    } else {
+      const like = this.likeRepository.create({
+        userId,
+        commentId,
+      });
+      await this.likeRepository.save(like);
+      comment.likeCount++;
+    }
+
+    await this.commentRepository.save(comment);
+
+    return {
+      success: true,
+      message: existingLike ? 'Comment unliked' : 'Comment liked',
+      data: { isLiked: !existingLike },
+    };
+  }
+  async getContentById(userId: string, contentId: string) {
+    const content = await this.contentRepository.findOne({
+      where: { id: contentId, creatorId: userId },
+    });
+    if (!content) {
+      throw new BadRequestException('Content not found');
+    }
+    return {
+      success: true,
+      message: 'Content retrieved successfully',
+      data: { content },
     };
   }
 }

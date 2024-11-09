@@ -1,3 +1,5 @@
+import { Comment } from 'src/interactions/entities/comment.entity';
+import { Like } from 'src/interactions/entities/like.entity';
 import { User } from 'src/modules/users/entities/user.entity';
 import {
   Entity,
@@ -7,6 +9,7 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  OneToMany,
 } from 'typeorm';
 
 export enum ContentType {
@@ -53,11 +56,17 @@ export class Content {
   likeCount: number;
 
   @ManyToOne(() => User)
-  @JoinColumn()
+  @JoinColumn({ name: 'creatorId' })
   creator: User;
 
   @Column()
   creatorId: string;
+
+  @OneToMany(() => Like, (like) => like.content)
+  likes: Like[];
+
+  @OneToMany(() => Comment, (comment) => comment.content)
+  comments: Comment[];
 
   @CreateDateColumn()
   createdAt: Date;
