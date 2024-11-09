@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { Content } from '../../content/entities/content.entity';
 import { Comment } from './comment.entity';
-import { User } from 'src/modules/users/entities/user.entity';
+import { User } from '../../modules/users/entities/user.entity';
 
 @Entity('likes')
 @Unique(['userId', 'contentId', 'commentId']) // Ensure user can only like once

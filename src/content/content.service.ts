@@ -13,6 +13,7 @@ import { User } from 'src/modules/users/entities/user.entity';
 import { FilterContentDto, FeedType } from './dto/filter-content.dto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { Subscription } from 'src/modules/users/entities/subscription.entity';
 
 @Injectable()
 export class ContentService {
@@ -23,6 +24,8 @@ export class ContentService {
     private likeRepository: Repository<Like>,
     @InjectRepository(Comment)
     private commentRepository: Repository<Comment>,
+    @InjectRepository(User)
+    private subscriptionRepository: Repository<Subscription>,
   ) {}
 
   async createContent(
@@ -77,29 +80,33 @@ export class ContentService {
     const queryBuilder = this.contentRepository
       .createQueryBuilder('content')
       .leftJoinAndSelect('content.creator', 'creator')
-      .leftJoinAndSelect('content.likes', 'likes')
       .where('content.isPublished = :isPublished', { isPublished: true });
 
-    switch (feed) {
+    switch (feed.toLowerCase()) {
       case FeedType.SUBSCRIBED:
         queryBuilder.innerJoin(
           'user_subscriptions',
           'sub',
-          'sub.creatorId = creator.id AND sub.subscriberId = :userId',
-          { userId: user.id },
+          'sub.creatorId = creator.id AND sub.subscriberId = :userId AND sub.isActive = :isActive',
+          { userId: user.id, isActive: true },
         );
         break;
+
       case FeedType.TRENDING:
         queryBuilder
           .orderBy('content.viewCount', 'DESC')
           .addOrderBy('content.likeCount', 'DESC')
           .andWhere('content.createdAt >= :date', {
-            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
+            date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
           });
         break;
+
       case FeedType.LIFE:
-        queryBuilder.andWhere(':tag = ANY(content.tags)', { tag: 'life' });
+        queryBuilder.andWhere(`content.tags::jsonb ? :tag`, { tag: 'life' });
+        // Or if tags is stored as an array:
+        // .andWhere(':tag = ANY(content.tags)', { tag: 'life' });
         break;
+
       default: // FOR_YOU
         queryBuilder
           .orderBy('content.createdAt', 'DESC')
@@ -108,18 +115,36 @@ export class ContentService {
 
     // Add pagination
     const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
+    const [contents, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
 
-    const [contents, total] = await queryBuilder.getManyAndCount();
+    // Get likes for these contents for the current user
+    const userLikes = await this.likeRepository.find({
+      where: {
+        userId: user.id,
+        contentId: In(contents.map((c) => c.id)),
+      },
+    });
+
+    // Get user's subscriptions
+    const userSubscriptions = await this.subscriptionRepository.find({
+      where: {
+        subscriberId: user.id,
+        creatorId: In(contents.map((c) => c.creatorId)),
+        isActive: true,
+      },
+    });
 
     // Enrich content with user-specific data
-    const enrichedContents = await Promise.all(
-      contents.map(async (content) => ({
-        ...content,
-        isLiked: await this.hasUserLikedContent(user.id, content.id),
-        isSubscribed: await this.isUserSubscribedTo(user.id, content.creatorId),
-      })),
-    );
+    const enrichedContents = contents.map((content) => ({
+      ...content,
+      isLiked: userLikes.some((like) => like.contentId === content.id),
+      isSubscribed: userSubscriptions.some(
+        (sub) => sub.creatorId === content.creatorId,
+      ),
+    }));
 
     return {
       success: true,
@@ -135,7 +160,6 @@ export class ContentService {
       },
     };
   }
-
   async publishContent(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
       where: { id: contentId, creatorId: userId },
