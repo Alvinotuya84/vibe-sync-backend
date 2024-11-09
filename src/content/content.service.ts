@@ -586,17 +586,35 @@ export class ContentService {
       data: { isLiked: !existingLike },
     };
   }
+  // In ContentService
   async getContentById(userId: string, contentId: string) {
     const content = await this.contentRepository.findOne({
-      where: { id: contentId, creatorId: userId },
+      where: { id: contentId }, // Remove creatorId check
+      relations: ['creator'], // Add creator relation
     });
+
     if (!content) {
-      throw new BadRequestException('Content not found');
+      throw new NotFoundException('Content not found');
     }
+
+    // Get additional user-specific data
+    const [isLiked, isSubscribed] = await Promise.all([
+      this.hasUserLikedContent(userId, contentId),
+      this.isUserSubscribedTo(userId, content.creatorId),
+    ]);
+
+    // Format media paths
+    const formattedContent = {
+      ...content,
+
+      isLiked,
+      isSubscribed,
+    };
+
     return {
       success: true,
       message: 'Content retrieved successfully',
-      data: { content },
+      data: { content: formattedContent },
     };
   }
 
