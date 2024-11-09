@@ -446,6 +446,7 @@ export class ContentService {
           type: ContentType.VIDEO,
         },
         relations: ['creator'],
+        take: 2,
       });
 
       // console.log('Found videos:', videos);

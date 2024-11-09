@@ -105,50 +105,75 @@ export class ChatService {
   }
 
   // src/chat/chat.service.ts
+  // src/chat/chat.service.ts
   async getConversations(userId: string) {
     try {
+      // Get conversations with participants
       const conversations = await this.conversationRepository
         .createQueryBuilder('conversation')
-        .leftJoinAndSelect('conversation.participants', 'participant')
-        .leftJoin(
-          'messages',
-          'lastMessage',
-          `lastMessage.conversationId = conversation.id AND 
-           lastMessage."createdAt" = (
-             SELECT MAX("createdAt") 
-             FROM messages 
-             WHERE "conversationId" = conversation.id
-           )`,
-        )
-        .select([
-          'conversation',
-          'participant',
-          'lastMessage.id',
-          'lastMessage.text',
-          'lastMessage.createdAt',
-          'lastMessage.senderId',
-          'lastMessage.isRead',
-        ])
+        .leftJoinAndSelect('conversation.participants', 'participants')
         .where((qb) => {
           const subQuery = qb
             .subQuery()
-            .select('cp.conversationsId')
-            .from('conversations_participants_users', 'cp')
-            .where('cp.usersId = :userId')
+            .select('conversation_participants.conversationsId')
+            .from(
+              'conversations_participants_users',
+              'conversation_participants',
+            )
+            .where('conversation_participants.usersId = :userId')
             .getQuery();
           return 'conversation.id IN ' + subQuery;
         })
         .setParameter('userId', userId)
-        .orderBy('lastMessage.createdAt', 'DESC')
         .getMany();
 
-      // Transform the result with proper typing
-      const transformedConversations: ConversationWithDetails[] =
-        conversations.map((conv) => ({
-          ...conv,
-          otherParticipant: conv.participants.find((p) => p.id !== userId)!,
-          lastMessage: (conv as any).lastMessage || null,
-        }));
+      // Get last messages for these conversations
+      const conversationIds = conversations.map((conv) => conv.id);
+
+      let lastMessages: Message[] = [];
+      if (conversationIds.length > 0) {
+        lastMessages = await this.messageRepository
+          .createQueryBuilder('message')
+          .where((qb) => {
+            const subQuery = qb
+              .subQuery()
+              .select('DISTINCT ON (m.conversationId) m.id')
+              .from(Message, 'm')
+              .where('m.conversationId IN (:...conversationIds)')
+              .orderBy('m.conversationId')
+              .addOrderBy('m.createdAt', 'DESC')
+              .getQuery();
+            return 'message.id IN ' + subQuery;
+          })
+          .setParameter('conversationIds', conversationIds)
+          .orderBy('message.createdAt', 'DESC')
+          .getMany();
+      }
+
+      // Create a map for quick lookup of last messages
+      const lastMessageMap = new Map(
+        lastMessages.map((msg) => [msg.conversationId, msg]),
+      );
+
+      // Transform the conversations
+      const transformedConversations = conversations.map((conv) => {
+        const otherParticipant = conv.participants.find((p) => p.id !== userId);
+        return {
+          id: conv.id,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          participants: conv.participants,
+          otherParticipant,
+          lastMessage: lastMessageMap.get(conv.id) || null,
+        };
+      });
+
+      // Sort by last message date or creation date
+      transformedConversations.sort((a, b) => {
+        const dateA = a.lastMessage?.createdAt || a.createdAt;
+        const dateB = b.lastMessage?.createdAt || b.createdAt;
+        return new Date(dateB).getTime() - new Date(dateA).getTime();
+      });
 
       return {
         success: true,

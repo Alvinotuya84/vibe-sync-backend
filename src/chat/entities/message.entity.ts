@@ -1,3 +1,4 @@
+// src/chat/entities/message.entity.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -24,16 +25,16 @@ export class Message {
   @JoinColumn({ name: 'senderId' })
   sender: User;
 
-  @Column()
+  @Column({ type: 'uuid' })
   senderId: string;
 
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   @JoinColumn({ name: 'conversationId' })
   conversation: Conversation;
 
-  @Column()
+  @Column({ type: 'uuid' })
   conversationId: string;
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt: Date;
 }
