@@ -16,6 +16,8 @@ import { DatabaseModule } from 'database/database.module';
 import { ensureUploadDirectoriesExist } from './utils/upload.utils';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ChatModule } from './chat/chat.module';
+import { SearchModule } from './search/search.module';
+import { GigsModule } from './gigs/gigs.module';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { ChatModule } from './chat/chat.module';
     DatabaseModule,
     NotificationsModule,
     ChatModule,
+    SearchModule,
+    GigsModule,
   ],
   controllers: [AppController],
   providers: [
