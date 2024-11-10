@@ -493,7 +493,34 @@ export class ContentService {
     });
     return !!like;
   }
+  async getUserPosts(userId: string, query: { page?: number; limit?: number }) {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
 
+    const [posts, total] = await this.contentRepository
+      .createQueryBuilder('content')
+      .where('content.creatorId = :userId', { userId })
+      .andWhere('content.isPublished = :isPublished', { isPublished: true })
+      .orderBy('content.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      success: true,
+      message: 'User posts retrieved successfully',
+      data: {
+        posts,
+        pagination: {
+          total,
+          page,
+          limit,
+          hasNextPage: total > skip + limit,
+        },
+      },
+    };
+  }
   private async hasUserLikedComment(
     userId: string,
     commentId: string,

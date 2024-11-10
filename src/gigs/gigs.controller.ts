@@ -55,4 +55,11 @@ export class GigsController {
   remove(@GetUser('id') userId: string, @Param('id') id: string) {
     return this.gigsService.deleteGig(userId, id);
   }
+  @Get(':userId/gigs')
+  async getUserGigs(
+    @Param('userId') userId: string,
+    @Query() query: { page?: number; limit?: number; status?: string },
+  ) {
+    return this.gigsService.getUserGigs(userId, query);
+  }
 }

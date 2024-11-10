@@ -174,5 +174,13 @@ export class ContentController {
     return this.contentService.getFeedVideos(initialId, user, page, limit);
   }
 
+  @Get(':userId/posts')
+  async getUserPosts(
+    @Param('userId') userId: string,
+    @Query() query: { page?: number; limit?: number },
+  ) {
+    return this.contentService.getUserPosts(userId, query);
+  }
+
   // content.controller.ts
 }

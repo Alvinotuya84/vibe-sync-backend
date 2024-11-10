@@ -129,4 +129,42 @@ export class GigsService {
       message: 'Gig deleted successfully',
     };
   }
+
+  async getUserGigs(
+    userId: string,
+    query: { page?: number; limit?: number; status?: string },
+  ) {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.gigRepository
+      .createQueryBuilder('gig')
+      .leftJoinAndSelect('gig.creator', 'creator')
+      .where('gig.creatorId = :userId', { userId })
+      .orderBy('gig.createdAt', 'DESC');
+
+    if (query.status) {
+      queryBuilder.andWhere('gig.status = :status', { status: query.status });
+    }
+
+    const [gigs, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      success: true,
+      message: 'User gigs retrieved successfully',
+      data: {
+        gigs,
+        pagination: {
+          total,
+          page,
+          limit,
+          hasNextPage: total > skip + limit,
+        },
+      },
+    };
+  }
 }

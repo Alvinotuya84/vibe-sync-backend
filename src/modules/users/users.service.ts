@@ -116,4 +116,14 @@ export class UsersService {
   formatUsername(username: string): string {
     return username.toLowerCase().trim();
   }
+  async getUserStats(userId: string) {
+    const stats = await this.usersRepository
+      .createQueryBuilder('user')
+      .where('user.id = :userId', { userId })
+      .loadRelationCountAndMap('user.postsCount', 'user.posts')
+      .loadRelationCountAndMap('user.gigsCount', 'user.gigs')
+      .getOne();
+
+    return stats;
+  }
 }
