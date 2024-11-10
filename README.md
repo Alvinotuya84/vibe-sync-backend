@@ -60,7 +60,7 @@ src/
 
 ### Prerequisites
 
-- Node.js 16+
+- Node.js 18.18+
 - PostgreSQL 12+
 - npm or yarn
 - Redis (optional, for caching)
@@ -238,7 +238,7 @@ This project is licensed under the MIT License
 
 ## 📞 Support
 
-For support, email support@vibesync.com or join our Discord channel.
+For support, email otuyaalvin@gmail.com or join our Discord channel.
 
 ## 🔄 Version History
 
