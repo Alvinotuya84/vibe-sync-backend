@@ -14,4 +14,11 @@ export const getTypeOrmConfig = async (
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   synchronize: process.env.NODE_ENV !== 'production', // Disable in production
   logging: process.env.NODE_ENV !== 'production',
+  ssl: true, // Add this
+  extra: {
+    // And this
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  },
 });

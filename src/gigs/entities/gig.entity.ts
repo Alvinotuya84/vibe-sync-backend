@@ -40,8 +40,8 @@ export class Gig {
   })
   status: GigStatus;
 
-  @ManyToOne(() => User)
-  @JoinColumn()
+  @ManyToOne(() => User, (user) => user.gigs)
+  @JoinColumn({ name: 'creatorId' })
   creator: User;
 
   @Column()

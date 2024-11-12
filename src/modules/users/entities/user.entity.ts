@@ -6,9 +6,12 @@ import {
   UpdateDateColumn,
   BeforeInsert,
   BeforeUpdate,
+  OneToMany,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import * as bcrypt from 'bcrypt';
+import { Content } from 'src/content/entities/content.entity';
+import { Gig } from 'src/gigs/entities/gig.entity';
 
 @Entity('users')
 export class User {
@@ -61,6 +64,12 @@ export class User {
   creatorId?: string;
   @Column({ default: true })
   isActive: boolean;
+
+  @OneToMany(() => Content, (content) => content.creator)
+  posts: Content[];
+
+  @OneToMany(() => Gig, (gig) => gig.creator)
+  gigs: Gig[];
 
   @CreateDateColumn()
   createdAt: Date;

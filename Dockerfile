@@ -1,28 +1,40 @@
-# Build stage
-FROM node:lts-alpine AS builder
- 
-USER node
-WORKDIR /home/node
- 
-COPY package*.json .
-RUN npm ci
- 
-COPY --chown=node:node . .
-RUN npm run build && npm prune --omit=dev
- 
- 
-# Final run stage
-FROM node:lts-alpine
- 
-ENV NODE_ENV production
-USER node
-WORKDIR /home/node
- 
-COPY --from=builder --chown=node:node /home/node/package*.json .
-COPY --from=builder --chown=node:node /home/node/node_modules ./node_modules
-COPY --from=builder --chown=node:node /home/node/dist ./dist
- 
-ARG PORT
-EXPOSE ${PORT:-8000}
- 
-CMD ["node", "dist/src/main.js"]
+# Dockerfile
+FROM node:18-alpine as builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy app source
+COPY . .
+
+# Build app
+RUN npm run build
+
+# Production stage
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install production dependencies only
+RUN npm install --production
+
+# Copy built app from builder stage
+COPY --from=builder /app/dist ./dist
+
+# Copy necessary files
+COPY .env* ./
+
+# Expose port
+EXPOSE 8000
+
+# Start app
+CMD ["npm", "run", "start:prod"]
