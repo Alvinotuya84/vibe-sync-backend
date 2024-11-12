@@ -112,9 +112,9 @@ export class ContentService {
         description: content.description,
         type: content.type,
         // Update paths to match your structure
-        mediaPath: `${process.env.BASE_URL}/uploads/content/media/${path.basename(content.mediaPath)}`,
+        mediaPath: `/uploads/content/media/${path.basename(content.mediaPath)}`,
         thumbnailPath: content.thumbnailPath
-          ? `${process.env.BASE_URL}/uploads/content/thumbnail/${path.basename(content.thumbnailPath)}`
+          ? `/uploads/content/thumbnail/${path.basename(content.thumbnailPath)}`
           : null,
         tags: content.tags || [],
         likeCount: content.likeCount || 0,
@@ -124,7 +124,7 @@ export class ContentService {
           id: content.creator?.id,
           username: content.creator?.username,
           profileImageUrl: content.creator?.profileImagePath
-            ? `${process.env.BASE_URL}/uploads/profile-images/${path.basename(content.creator.profileImagePath)}`
+            ? `/uploads/profile-images/${path.basename(content.creator.profileImagePath)}`
             : null,
           isVerified: content.creator?.isVerified || false,
         },

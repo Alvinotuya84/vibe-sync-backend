@@ -117,13 +117,37 @@ export class UsersService {
     return username.toLowerCase().trim();
   }
   async getUserStats(userId: string) {
-    const stats = await this.usersRepository
-      .createQueryBuilder('user')
-      .where('user.id = :userId', { userId })
-      .loadRelationCountAndMap('user.postsCount', 'user.posts')
-      .loadRelationCountAndMap('user.gigsCount', 'user.gigs')
-      .getOne();
+    try {
+      const stats = await this.usersRepository
+        .createQueryBuilder('user')
+        .where('user.id = :userId', { userId })
+        .loadRelationCountAndMap(
+          'user.postsCount',
+          'user.posts',
+          'posts',
+          (qb) => qb.where('posts.creatorId = :userId', { userId }),
+        )
+        .loadRelationCountAndMap('user.gigsCount', 'user.gigs', 'gigs', (qb) =>
+          qb.where('gigs.creatorId = :userId', { userId }),
+        )
+        .getOne();
 
-    return stats;
+      // If no stats found, return default values
+      if (!stats) {
+        return {
+          postsCount: 0,
+          gigsCount: 0,
+        };
+      }
+
+      return stats;
+    } catch (error) {
+      console.error('Error getting user stats:', error);
+      // Return default values if there's an error
+      return {
+        postsCount: 0,
+        gigsCount: 0,
+      };
+    }
   }
 }

@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  api:
+    container_name: vibesync-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    environment:
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=${DATABASE_PORT}
+      - DATABASE_USERNAME=${DATABASE_USERNAME}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_NAME=${DATABASE_NAME}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION=${JWT_EXPIRATION}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - BASE_URL=${BASE_URL}
+    depends_on:
+      - postgres
+    networks:
+      - vibesync-network
+
+  postgres:
+    container_name: vibesync-postgres
+    image: postgres
+    ports:
+      - '5432:5432'
+    environment:
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=vibe_sync
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vibesync-network
+
+networks:
+  vibesync-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

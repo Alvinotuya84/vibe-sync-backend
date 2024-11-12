@@ -55,7 +55,7 @@ export class Content {
   @Column({ default: 0 })
   likeCount: number;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, (user) => user.posts)
   @JoinColumn({ name: 'creatorId' })
   creator: User;
 
